@@ -24,6 +24,63 @@ from scipy.ndimage import binary_dilation
 from scipy import ndimage as ndi
 import numpy as np
 from math import sqrt, ceil
+import os
+def run_unet_segmentation(image, model_path=None, device=None, threshold=0.5):
+    '''Segments an image using a UNet model (TorchScript or pickled module).
+    Parameters:
+    image: image as a numpy array
+    model_path: optional path to a TorchScript (.pt) or pickled torch module
+    device: optional torch device string (e.g. "cpu", "cuda")
+    threshold: float threshold for binarizing the model output
+    Returns:
+    mask: boolean segmentation mask'''
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError("PyTorch is required to run deep learning segmentation.") from exc
+
+    if model_path is None:
+        model_path = os.environ.get("BLOBINSPECTOR_UNET_MODEL_PATH", "./resources/unet_model.pt")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(
+            f"UNet model not found at {model_path}. Set BLOBINSPECTOR_UNET_MODEL_PATH to your model file."
+        )
+
+    if image.ndim == 3:
+        if image.shape[-1] == 4:
+            image = color.rgba2rgb(image)
+        if image.shape[-1] == 3:
+            image = color.rgb2gray(image)
+    image = image.astype(np.float32)
+    max_im = np.max(image)
+    if max_im > 1:
+        image = image / max_im
+
+    device = torch.device(device) if device else torch.device("cpu")
+    tensor = torch.from_numpy(image).unsqueeze(0).unsqueeze(0).to(device)
+
+    model = None
+    try:
+        model = torch.jit.load(model_path, map_location=device)
+    except RuntimeError:
+        model_obj = torch.load(model_path, map_location=device)
+        if isinstance(model_obj, torch.nn.Module):
+            model = model_obj
+        else:
+            raise ValueError(
+                "Unsupported UNet model format. Please provide a TorchScript model or a pickled torch.nn.Module."
+            )
+    model.eval()
+    with torch.no_grad():
+        output = model(tensor)
+    if isinstance(output, (tuple, list)):
+        output = output[0]
+    output = output.squeeze()
+    if output.ndim > 2:
+        output = output[0]
+    output = output.detach().cpu().numpy()
+    mask = output >= threshold
+    return mask
 
 def convert_to_8_bits(image):
     '''Convert image to 8 bits
