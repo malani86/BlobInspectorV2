@@ -1075,7 +1075,7 @@ def set_current_image_options(window : Ui_MainWindow,filename,slice_number):
         window.combob_Threshold.setCurrentIndex(window.combob_Threshold.findText("Two thresholds"))
         window.le_ThresholdOne.setDisabled(False)
         window.le_ThresholdTwo.setDisabled(False)
-        elif appMod.threshold_algo[filename][slice_number] == "Deep learning (UNet)":
+    elif appMod.threshold_algo[filename][slice_number] == "Deep learning (UNet)":
         window.combob_Threshold.setCurrentIndex(window.combob_Threshold.findText("Deep learning (UNet)"))
         window.le_ThresholdOne.setDisabled(True)
         window.le_ThresholdTwo.setDisabled(True)
