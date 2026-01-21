@@ -457,7 +457,7 @@ def open_batch_analysis_window(window : Ui_MainWindow):
     bw.le_BlobsDetectionMaximumRadius.editingFinished.connect(lambda : input_blobs_radius(bw.le_BlobsDetectionMaximumRadius,bw.le_BlobsDetectionMinimumRadius,1))
     bw.le_ThresholdOne.editingFinished.connect(lambda : input_thresholds(bw,bw.le_ThresholdOne,bw.le_ThresholdTwo,0,255,"I"))
     bw.le_ThresholdTwo.editingFinished.connect(lambda : input_thresholds(bw,bw.le_ThresholdTwo,bw.le_ThresholdOne,0,255,"II"))
-    bw.combob_Threshold.currentTextChanged.connect(lambda : change_threshold_combobox(bw.combob_Threshold,bw.le_ThresholdTwo))
+    bw.combob_Threshold.currentTextChanged.connect(lambda : change_threshold_combobox(bw.combob_Threshold,bw.le_ThresholdTwo,bw.le_ThresholdOne))
     bw.pb_DefaultOptions.clicked.connect(lambda : input_default_options(window))
     bw.pb_StartAnalysis.clicked.connect(lambda : start_batch_analysis(window))
     bw.show()
@@ -582,7 +582,7 @@ def initialise_options_window(window : Ui_MainWindow):
     ow.le_ScaleNumberPixels.editingFinished.connect(lambda : input_positive_integer(ow.le_ScaleNumberPixels))
     ow.le_ScaleNumberPixels.editingFinished.connect(lambda : scale_checked(window,False))
     ow.le_IlluminationRollingBallRadius.editingFinished.connect(lambda : input_positive_integer(ow.le_IlluminationRollingBallRadius))
-    ow.combob_Threshold.currentTextChanged.connect(lambda : change_threshold_combobox(ow.combob_Threshold,ow.le_SegmentationThresholdTwo))
+    ow.combob_Threshold.currentTextChanged.connect(lambda : change_threshold_combobox(ow.combob_Threshold,ow.le_SegmentationThresholdTwo,ow.le_SegmentationThresholdOne))
     ow.le_SegmentationThresholdOne.editingFinished.connect(lambda : input_thresholds(ow,ow.le_SegmentationThresholdOne,ow.le_SegmentationThresholdTwo,0,255,"I"))
     ow.le_SegmentationThresholdTwo.editingFinished.connect(lambda : input_thresholds(ow,ow.le_SegmentationThresholdTwo,ow.le_SegmentationThresholdOne,0,255,"II"))
     ow.le_SegmentationBlobsMinRadius.editingFinished.connect(lambda : input_blobs_radius(ow.le_SegmentationBlobsMinRadius,ow.le_SegmentationBlobsMaxRadius,1))
@@ -874,6 +874,8 @@ def input_thresholds(window, widget1, widget2, min_value, max_value, original_te
     min_value: the minimum range value (included)
     max_value: the maximum range value (included)
     original_text: a string with the original text of the first widget'''
+    if window.combob_Threshold.currentText() == "Deep learning (UNet)":
+        return
     if widget1.text() !="I" and widget1.text() !="II":
         if check_value_range(widget1.text(),min_value,max_value):
             if window.combob_Threshold.currentText() == "One threshold":
@@ -916,16 +918,29 @@ def input_thresholds(window, widget1, widget2, min_value, max_value, original_te
             widget1.setText(original_text)
             widget1.clearFocus()                   
 
-def change_threshold_combobox(combobox, lineedit):
+def change_threshold_combobox(combobox, lineedit,  lineedit_one=None):
     '''Changes the display of a QLineEdit depending on the text in a QCombobox
     Parameters:
     combobox: the QCombobox
-    lineedit: the QLineEdit'''
-    if combobox.currentText() == "One threshold":
+    lineedit: the QLineEdit
+    lineedit_one: optional QLineEdit for the first threshold'''
+    current_text = combobox.currentText()
+    if current_text == "One threshold":
         lineedit.setText("II")
         lineedit.setEnabled(False)
-    else:
+        if lineedit_one is not None:
+            lineedit_one.setEnabled(True)
+    elif current_text == "Two thresholds":
+    
         lineedit.setEnabled(True)
+        if lineedit_one is not None:
+            lineedit_one.setEnabled(True)
+    else:
+        lineedit.setText("II")
+        lineedit.setEnabled(False)
+        if lineedit_one is not None:
+            lineedit_one.setText("I")
+            lineedit_one.setEnabled(False)
 
 def slider_value_changed(window : Ui_MainWindow):
     '''Triggers the change of image display when the slider value changes
@@ -1056,11 +1071,17 @@ def set_current_image_options(window : Ui_MainWindow,filename,slice_number):
         window.le_ThresholdTwo.blockSignals(True)
         window.le_ThresholdTwo.setText("II")
         window.le_ThresholdTwo.blockSignals(False)
-    if appMod.threshold_algo[filename][slice_number] is not None and appMod.threshold_algo[filename][slice_number] == "Two thresholds":
-        window.combob_Threshold.setCurrentIndex(1)
+    if appMod.threshold_algo[filename][slice_number] == "Two thresholds":
+        window.combob_Threshold.setCurrentIndex(window.combob_Threshold.findText("Two thresholds"))
+        window.le_ThresholdOne.setDisabled(False)
         window.le_ThresholdTwo.setDisabled(False)
+        elif appMod.threshold_algo[filename][slice_number] == "Deep learning (UNet)":
+        window.combob_Threshold.setCurrentIndex(window.combob_Threshold.findText("Deep learning (UNet)"))
+        window.le_ThresholdOne.setDisabled(True)
+        window.le_ThresholdTwo.setDisabled(True)
     else:
-        window.combob_Threshold.setCurrentIndex(0)
+        window.combob_Threshold.setCurrentIndex(window.combob_Threshold.findText("One threshold"))
+        window.le_ThresholdOne.setDisabled(False)
         window.le_ThresholdTwo.setDisabled(True)
     if appMod.blobs_detection_algo[filename][slice_number] is not None:
         blobs_algo = return_blobs_algorithms()
@@ -1517,6 +1538,8 @@ def input_threshold_one(window : Ui_MainWindow, slice_number=None):
     slice_number : the index of the image in the stack'''
     appMod=window.appMod
     if window.combob_FileName.currentText():
+        if window.combob_Threshold.currentText() == "Deep learning (UNet)":
+            return
         highlight_groupbox(window,"segmentation")
         filename = window.combob_FileName.currentText()
         single_image = False
@@ -1586,6 +1609,8 @@ def input_threshold_two(window : Ui_MainWindow):
     window : an instance of the app'''
     appMod=window.appMod
     if window.combob_FileName.currentText() and window.cb_IncludeImage.isChecked():
+        if window.combob_Threshold.currentText() == "Deep learning (UNet)":
+            return
         highlight_groupbox(window,"segmentation")
         filename, slice_number = get_filename_slice_number(window)
         display_original_image(window,filename,slice_number)
@@ -1648,16 +1673,49 @@ def threshold_option_changed(window : Ui_MainWindow):
     window : an instance of the app'''
     highlight_groupbox(window,"segmentation")
     if window.combob_Threshold.currentText() == "One threshold":
+        window.le_ThresholdOne.setDisabled(False)
         window.le_ThresholdTwo.blockSignals(True)
         window.le_ThresholdTwo.setText("II")
         window.le_ThresholdTwo.blockSignals(False)
         window.le_ThresholdTwo.setDisabled(True)
         if window.le_ThresholdOne.text() != "I":
             input_threshold_one(window)
-    else:
+    elif window.combob_Threshold.currentText() == "Two thresholds":
+        window.le_ThresholdOne.setDisabled(False)
         window.le_ThresholdTwo.setDisabled(False)
         if window.le_ThresholdOne.text() != "I" and window.le_ThresholdTwo.text() != "II":
             input_threshold_two(window)
+    else:
+        window.le_ThresholdOne.blockSignals(True)
+        window.le_ThresholdOne.setText("I")
+        window.le_ThresholdOne.blockSignals(False)
+        window.le_ThresholdTwo.blockSignals(True)
+        window.le_ThresholdTwo.setText("II")
+        window.le_ThresholdTwo.blockSignals(False)
+        window.le_ThresholdOne.setDisabled(True)
+        window.le_ThresholdTwo.setDisabled(True)
+
+def apply_deep_learning_segmentation(window : Ui_MainWindow, image, filename, slice_number):
+    '''Applies the deep learning segmentation model to an image.
+    Parameters:
+    window : an instance of the app
+    image : image as a numpy array
+    filename : name of the image file
+    slice_number : index of the image in the stack'''
+    appMod = window.appMod
+    try:
+        window.setCursor(QCursor(Qt.WaitCursor))
+        mask = run_unet_segmentation(image)
+    except Exception as e:
+        show_error_message(f"Deep learning segmentation failed.\n{e}")
+        return None
+    finally:
+        window.setCursor(QCursor(Qt.ArrowCursor))
+    appMod.threshold_algo[filename][slice_number] = "Deep learning (UNet)"
+    appMod.first_threshold[filename][slice_number] = None
+    appMod.second_threshold[filename][slice_number] = None
+    appMod.thresholded_images[filename][slice_number] = mask
+    return mask
 
 def combobox_blobs_changed(window : Ui_MainWindow):
     '''Highlights the box 'segmentation' when the combobox for blobs detection is activated
@@ -1725,7 +1783,38 @@ def segmentation_to_image(window : Ui_MainWindow, slice_number=None):
             slice_number = int(window.hs_SliceNumber.value())
             single_image = True
         if appMod.included_images[filename][slice_number]:
-            if window.le_ThresholdOne.text() != "I":
+            if window.combob_Threshold.currentText() == "Deep learning (UNet)":
+                if appMod.corrected_images[filename][slice_number] is not None:
+                    image = appMod.corrected_images[filename][slice_number]
+                else:
+                    image = appMod.stacks[filename][slice_number]
+                mask = apply_deep_learning_segmentation(window,image,filename,slice_number)
+                if mask is None:
+                    return
+                clear_results(window,filename,slice_number,"blcd")
+                if window.combob_BlobsDetection.currentIndex() == 0:
+                    if single_image == True:
+                        set_current_image_options(window,filename,slice_number)
+                        display_original_image(window,filename,slice_number,focus = "segmentation")
+                elif window.le_BlobsDetectionMinimumRadius.text() != "min" and window.le_BlobsDetectionMaximumRadius.text() != "max":
+                    algo_index = int(window.combob_BlobsDetection.currentIndex())
+                    min_radius = int(window.le_BlobsDetectionMinimumRadius.text())
+                    max_radius = int(window.le_BlobsDetectionMaximumRadius.text())
+                    image = appMod.thresholded_images[filename][slice_number]
+                    window.setCursor(QCursor(Qt.WaitCursor))
+                    blobs_list = blobs_detection(image,algo_index,min_radius,max_radius)
+                    bl_mask = blobs_mask(image,blobs_list)
+                    window.setCursor(QCursor(Qt.ArrowCursor))
+                    appMod.blobs_detection_algo[filename][slice_number] = window.combob_BlobsDetection.itemText(algo_index)
+                    appMod.blobs_radius[filename][slice_number] = (min_radius,max_radius)
+                    blobs_thres_im = image & bl_mask
+                    appMod.blobs_thresholded_images[filename][slice_number] = blobs_thres_im
+                    if single_image == True:
+                        set_current_image_options(window,filename,slice_number)
+                        display_original_image(window,filename,slice_number,focus = "segmentation")
+                else:
+                    show_error_message("Please choose a minimum and maximum radius for blobs detection.")
+            elif window.le_ThresholdOne.text() != "I":
                 if window.combob_BlobsDetection.currentIndex() == 0:
                     input_threshold_one(window,slice_number)
                 elif window.le_BlobsDetectionMinimumRadius.text() != "min" and window.le_BlobsDetectionMaximumRadius.text() != "max":
@@ -2428,6 +2517,8 @@ def compute_count_results(window : Ui_MainWindow,filename,nb_slices):
                                                             appMod.labeling_images_with_labels[filename][i][3],appMod.labeling_images_with_labels[filename][i][4]
                 if appMod.threshold_algo[filename][i] == window.combob_Threshold.itemText(0):
                     thresholds = str(appMod.first_threshold[filename][i])
+                elif appMod.threshold_algo[filename][i] == window.combob_Threshold.itemText(2):
+                    thresholds = window.combob_Threshold.itemText(2)
                 else:
                     thresholds = f"{appMod.first_threshold[filename][i]}_{appMod.second_threshold[filename][i]}"
                 if appMod.blobs_detection_algo[filename][i] is not None:
