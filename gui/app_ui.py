@@ -301,6 +301,7 @@ class Ui_MainWindow(object):
         self.combob_Threshold = QComboBox(self.gb_Segmentation)
         self.combob_Threshold.addItem("")
         self.combob_Threshold.addItem("")
+        self.combob_Threshold.addItem("")
         self.combob_Threshold.setObjectName(u"combob_Threshold")
         self.combob_Threshold.setFont(font6)
 
@@ -1272,6 +1273,7 @@ class Ui_MainWindow(object):
         self.le_BlobsDetectionMaximumRadius.setText(QCoreApplication.translate("MainWindow", u"max", None))
         self.combob_Threshold.setItemText(0, QCoreApplication.translate("MainWindow", u"One threshold", None))
         self.combob_Threshold.setItemText(1, QCoreApplication.translate("MainWindow", u"Two thresholds", None))
+        self.combob_Threshold.setItemText(2, QCoreApplication.translate("MainWindow", u"Deep learning (UNet)", None))
 
 #if QT_CONFIG(tooltip)
         self.combob_Threshold.setToolTip(QCoreApplication.translate("MainWindow", u"Choose thresholding option.", None))
