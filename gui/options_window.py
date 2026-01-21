@@ -40,7 +40,7 @@ class OptionsWindow(QtWidgets.QWidget, Ui_OptionsWindow):
             self.combob_ScaleColor.addItem(colors_list[i])
             self.combob_ScaleColor.setItemData(i,QColor(colors_list[i]),Qt.BackgroundRole)
         self.combob_Colormap.addItems(return_colormaps())
-        self.combob_Threshold.addItems(["One threshold","Two thresholds"])
+        self.combob_Threshold.addItems(["One threshold","Two thresholds","Deep learning (UNet)"])
         self.combob_SegmentationBlobs.addItems(return_blobs_algorithms())
         self.combob_Labeling.addItems(return_labeling_algorithms())
         self.combob_Contours.addItems(return_contouring_algorithms())
