@@ -63,6 +63,7 @@ class Ui_BatchAnalysisWindow(object):
         self.combob_Threshold = QComboBox(self.gb_Segmentation)
         self.combob_Threshold.addItem("")
         self.combob_Threshold.addItem("")
+        self.combob_Threshold.addItem("")
         self.combob_Threshold.setObjectName(u"combob_Threshold")
         font1 = QFont()
         font1.setPointSize(12)
@@ -446,6 +447,7 @@ class Ui_BatchAnalysisWindow(object):
         self.gb_Segmentation.setTitle(QCoreApplication.translate("BatchAnalysisWindow", u"Segmentation", None))
         self.combob_Threshold.setItemText(0, QCoreApplication.translate("BatchAnalysisWindow", u"One threshold", None))
         self.combob_Threshold.setItemText(1, QCoreApplication.translate("BatchAnalysisWindow", u"Two thresholds", None))
+        self.combob_Threshold.setItemText(2, QCoreApplication.translate("BatchAnalysisWindow", u"Deep learning (UNet)", None))
 
 #if QT_CONFIG(tooltip)
         self.combob_Threshold.setToolTip(QCoreApplication.translate("BatchAnalysisWindow", u"Choose thresholding option.", None))
