@@ -238,10 +238,10 @@ def run_unet_segmentation(image, model_path=None, device=None, threshold=0.5):
         raise ImportError("PyTorch is required to run deep learning segmentation.") from exc
 
     if model_path is None:
-        model_path = os.environ.get("BLOBINSPECTOR_UNET_MODEL_PATH", "./resources/unet_model.pt")
+        model_path = os.environ.get("BLOBINSPECTOR_UNET_MODEL_PATH", "./resources/unet_model.pth")
     if not os.path.exists(model_path):
         raise FileNotFoundError(
-            f"UNet model not found at {model_path}. Set BLOBINSPECTOR_UNET_MODEL_PATH to your model file."
+            f"UNet model not found at {model_path}. Set BLOBINSPECTOR_UNET_MODEL_PATH to your .pth model file."
         )
 
     if image.ndim == 3:
