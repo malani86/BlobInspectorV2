@@ -27,6 +27,7 @@ from math import sqrt, ceil
 import importlib
 import json
 import os
+
 def _build_unet_class(torch, use_bias=True):
     class _DoubleConvBlock:
         def __init__(self, in_channels, out_channels):
@@ -210,8 +211,68 @@ def _resolve_unet_builder(torch, state_dict_keys=None):
     }
 
 
-def _load_unet_state_dict(state_dict, device, torch):
+def _infer_unet_hyperparams(state_dict):
+    def _infer_features(keys):
+        candidates = []
+        for key in keys:
+            if key.endswith("weight"):
+                name = key.split(".")[0]
+                if name.startswith(("enc", "down", "downs")):
+                    weight = state_dict[key]
+                    if weight.ndim == 4:
+                        candidates.append(weight.shape[0])
+        return candidates
+
+    def _infer_in_channels(keys):
+        for key in keys:
+            if key.endswith("weight") and key.startswith(("enc1.0", "downs.0.0")):
+                weight = state_dict[key]
+                if weight.ndim == 4:
+                    return int(weight.shape[1])
+        return None
+
+    def _infer_out_channels(keys):
+        for key in keys:
+            if key.endswith("weight") and key.startswith(("conv.", "final_conv.")):
+                weight = state_dict[key]
+                if weight.ndim == 4:
+                    return int(weight.shape[0])
+        return None
+
+    keys = list(state_dict.keys())
+    arch_hint = None
+    if any(key.startswith(("upconv", "dec", "enc")) for key in keys):
+        arch_hint = "dc"
+    in_channels = _infer_in_channels(keys)
+    out_channels = _infer_out_channels(keys)
+    features = _infer_features(keys)
+    return {
+        "arch_hint": arch_hint,
+        "in_channels": in_channels,
+        "out_channels": out_channels,
+        "features": features or None,
+    }
+
+
+def _select_unet_builder(torch, state_dict):
+    inferred = _infer_unet_hyperparams(state_dict)
     model_cls, kwargs = _resolve_unet_builder(torch, state_dict_keys=state_dict.keys())
+    env_in_channels = os.environ.get("BLOBINSPECTOR_UNET_IN_CHANNELS")
+    env_out_channels = os.environ.get("BLOBINSPECTOR_UNET_OUT_CHANNELS")
+    env_features = os.environ.get("BLOBINSPECTOR_UNET_FEATURES")
+    if inferred["arch_hint"] and not os.environ.get("BLOBINSPECTOR_UNET_MODEL_ARCH"):
+        model_cls, kwargs = _resolve_unet_builder(torch, state_dict_keys=state_dict.keys())
+    if inferred["in_channels"] is not None and env_in_channels is None:
+        kwargs["in_channels"] = inferred["in_channels"]
+    if inferred["out_channels"] is not None and env_out_channels is None:
+        kwargs["out_channels"] = inferred["out_channels"]
+    if inferred["features"] and env_features is None:
+        kwargs["features"] = inferred["features"]
+    return model_cls, kwargs, inferred
+
+
+def _load_unet_state_dict(state_dict, device, torch):
+    model_cls, kwargs, inferred = _select_unet_builder(torch, state_dict)
     model = model_cls(**kwargs).to(device)
     cleaned_state = {}
     for key, value in state_dict.items():
@@ -221,7 +282,25 @@ def _load_unet_state_dict(state_dict, device, torch):
             cleaned_state[key] = value
     strict = os.environ.get("BLOBINSPECTOR_UNET_STRICT", "false").lower() == "true"
     model.load_state_dict(cleaned_state, strict=strict)
-    return model
+    return model, inferred
+
+
+def _prepare_unet_image(image, expected_in_channels):
+    if image.ndim == 3 and image.shape[-1] == 4:
+        image = color.rgba2rgb(image)
+    if expected_in_channels == 1:
+        if image.ndim == 3:
+            image = color.rgb2gray(image)
+    elif expected_in_channels and expected_in_channels > 1:
+        if image.ndim == 2:
+            image = np.repeat(image[:, :, None], expected_in_channels, axis=2)
+        elif image.ndim == 3 and image.shape[-1] == 1 and expected_in_channels == 3:
+            image = np.repeat(image, 3, axis=2)
+    image = image.astype(np.float32)
+    max_im = np.max(image)
+    if max_im > 1:
+        image = image / max_im
+    return image
 
 def run_unet_segmentation(image, model_path=None, device=None, threshold=0.5):
     '''Segments an image using a UNet model (state_dict, TorchScript,or pickled module).
