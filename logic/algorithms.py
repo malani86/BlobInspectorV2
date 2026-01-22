@@ -27,15 +27,14 @@ from math import sqrt, ceil
 import importlib
 import json
 import os
-
-def _build_unet_class(torch):
+def _build_unet_class(torch, use_bias=True):
     class _DoubleConvBlock:
         def __init__(self, in_channels, out_channels):
             self.block = torch.nn.Sequential(
-                torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+                torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=use_bias),
                 torch.nn.BatchNorm2d(out_channels),
                 torch.nn.ReLU(inplace=True),
-                torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+                torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=use_bias),
                 torch.nn.BatchNorm2d(out_channels),
                 torch.nn.ReLU(inplace=True),
             )
@@ -87,8 +86,88 @@ def _build_unet_class(torch):
     return _UNet
 
 
-def _resolve_unet_builder(torch):
+def _build_unet_dc_class(torch, use_bias=True):
+    class _DoubleConvBlock:
+        def __init__(self, in_channels, out_channels):
+            self.block = torch.nn.Sequential(
+                torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=use_bias),
+                torch.nn.BatchNorm2d(out_channels),
+                torch.nn.ReLU(inplace=True),
+                torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=use_bias),
+                torch.nn.BatchNorm2d(out_channels),
+                torch.nn.ReLU(inplace=True),
+            )
+
+        def __call__(self, x):
+            return self.block(x)
+
+    class _UNetDC(torch.nn.Module):
+        def __init__(self, in_channels=1, out_channels=1, features=None):
+            super().__init__()
+            if features is None:
+                features = [64, 128, 256, 512]
+            self.pool = torch.nn.MaxPool2d(kernel_size=2, stride=2)
+            self.enc1 = _DoubleConvBlock(in_channels, features[0]).block
+            self.enc2 = _DoubleConvBlock(features[0], features[1]).block
+            self.enc3 = _DoubleConvBlock(features[1], features[2]).block
+            self.enc4 = _DoubleConvBlock(features[2], features[3]).block
+            self.bottleneck = _DoubleConvBlock(features[3], features[3] * 2).block
+
+            self.upconv4 = torch.nn.ConvTranspose2d(features[3] * 2, features[3], kernel_size=2, stride=2)
+            self.dec4 = _DoubleConvBlock(features[3] * 2, features[3]).block
+            self.upconv3 = torch.nn.ConvTranspose2d(features[3], features[2], kernel_size=2, stride=2)
+            self.dec3 = _DoubleConvBlock(features[2] * 2, features[2]).block
+            self.upconv2 = torch.nn.ConvTranspose2d(features[2], features[1], kernel_size=2, stride=2)
+            self.dec2 = _DoubleConvBlock(features[1] * 2, features[1]).block
+            self.upconv1 = torch.nn.ConvTranspose2d(features[1], features[0], kernel_size=2, stride=2)
+            self.dec1 = _DoubleConvBlock(features[0] * 2, features[0]).block
+
+            self.conv = torch.nn.Conv2d(features[0], out_channels, kernel_size=1)
+
+        def forward(self, x):
+            enc1 = self.enc1(x)
+            enc2 = self.enc2(self.pool(enc1))
+            enc3 = self.enc3(self.pool(enc2))
+            enc4 = self.enc4(self.pool(enc3))
+
+            bottleneck = self.bottleneck(self.pool(enc4))
+
+            dec4 = self.upconv4(bottleneck)
+            if dec4.shape[2:] != enc4.shape[2:]:
+                dec4 = torch.nn.functional.interpolate(
+                    dec4, size=enc4.shape[2:], mode="bilinear", align_corners=False
+                )
+            dec4 = self.dec4(torch.cat((enc4, dec4), dim=1))
+
+            dec3 = self.upconv3(dec4)
+            if dec3.shape[2:] != enc3.shape[2:]:
+                dec3 = torch.nn.functional.interpolate(
+                    dec3, size=enc3.shape[2:], mode="bilinear", align_corners=False
+                )
+            dec3 = self.dec3(torch.cat((enc3, dec3), dim=1))
+
+            dec2 = self.upconv2(dec3)
+            if dec2.shape[2:] != enc2.shape[2:]:
+                dec2 = torch.nn.functional.interpolate(
+                    dec2, size=enc2.shape[2:], mode="bilinear", align_corners=False
+                )
+            dec2 = self.dec2(torch.cat((enc2, dec2), dim=1))
+
+            dec1 = self.upconv1(dec2)
+            if dec1.shape[2:] != enc1.shape[2:]:
+                dec1 = torch.nn.functional.interpolate(
+                    dec1, size=enc1.shape[2:], mode="bilinear", align_corners=False
+                )
+            dec1 = self.dec1(torch.cat((enc1, dec1), dim=1))
+
+            return self.conv(dec1)
+
+    return _UNetDC
+
+
+def _resolve_unet_builder(torch, state_dict_keys=None):
     class_path = os.environ.get("BLOBINSPECTOR_UNET_MODEL_CLASS")
+    arch_hint = os.environ.get("BLOBINSPECTOR_UNET_MODEL_ARCH")
     kwargs_env = os.environ.get("BLOBINSPECTOR_UNET_MODEL_KWARGS")
     kwargs = {}
     if kwargs_env:
@@ -103,17 +182,36 @@ def _resolve_unet_builder(torch):
         module = importlib.import_module(module_name)
         model_cls = getattr(module, class_name)
         return model_cls, kwargs
+    if arch_hint:
+        arch_hint = arch_hint.lower()
     if kwargs:
-        return _build_unet_class(torch), kwargs
+        use_bias = os.environ.get("BLOBINSPECTOR_UNET_USE_BIAS", "true").lower() != "false"
+        if arch_hint == "dc":
+            return _build_unet_dc_class(torch, use_bias=use_bias), kwargs
+        return _build_unet_class(torch, use_bias=use_bias), kwargs
     features_env = os.environ.get("BLOBINSPECTOR_UNET_FEATURES", "64,128,256,512")
     features = [int(item) for item in features_env.split(",") if item.strip()]
     in_channels = int(os.environ.get("BLOBINSPECTOR_UNET_IN_CHANNELS", "1"))
     out_channels = int(os.environ.get("BLOBINSPECTOR_UNET_OUT_CHANNELS", "1"))
-    return _build_unet_class(torch), {"in_channels": in_channels, "out_channels": out_channels, "features": features}
+    use_bias = os.environ.get("BLOBINSPECTOR_UNET_USE_BIAS", "true").lower() != "false"
+    if arch_hint is None and state_dict_keys:
+        if any(key.startswith(("upconv", "dec", "enc")) for key in state_dict_keys):
+            arch_hint = "dc"
+    if arch_hint == "dc":
+        return _build_unet_dc_class(torch, use_bias=use_bias), {
+            "in_channels": in_channels,
+            "out_channels": out_channels,
+            "features": features,
+        }
+    return _build_unet_class(torch, use_bias=use_bias), {
+        "in_channels": in_channels,
+        "out_channels": out_channels,
+        "features": features,
+    }
 
 
 def _load_unet_state_dict(state_dict, device, torch):
-    model_cls, kwargs = _resolve_unet_builder(torch)
+    model_cls, kwargs = _resolve_unet_builder(torch, state_dict_keys=state_dict.keys())
     model = model_cls(**kwargs).to(device)
     cleaned_state = {}
     for key, value in state_dict.items():
@@ -121,8 +219,10 @@ def _load_unet_state_dict(state_dict, device, torch):
             cleaned_state[key[7:]] = value
         else:
             cleaned_state[key] = value
-    model.load_state_dict(cleaned_state)
+    strict = os.environ.get("BLOBINSPECTOR_UNET_STRICT", "false").lower() == "true"
+    model.load_state_dict(cleaned_state, strict=strict)
     return model
+
 def run_unet_segmentation(image, model_path=None, device=None, threshold=0.5):
     '''Segments an image using a UNet model (state_dict, TorchScript,or pickled module).
     Parameters:
