@@ -24,12 +24,110 @@ from scipy.ndimage import binary_dilation
 from scipy import ndimage as ndi
 import numpy as np
 from math import sqrt, ceil
+import importlib
+import json
 import os
+
+def _build_unet_class(torch):
+    class _DoubleConvBlock:
+        def __init__(self, in_channels, out_channels):
+            self.block = torch.nn.Sequential(
+                torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+                torch.nn.BatchNorm2d(out_channels),
+                torch.nn.ReLU(inplace=True),
+                torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+                torch.nn.BatchNorm2d(out_channels),
+                torch.nn.ReLU(inplace=True),
+            )
+
+        def __call__(self, x):
+            return self.block(x)
+
+    class _UNet(torch.nn.Module):
+        def __init__(self, in_channels=1, out_channels=1, features=None):
+            super().__init__()
+            if features is None:
+                features = [64, 128, 256, 512]
+            self.downs = torch.nn.ModuleList()
+            self.ups = torch.nn.ModuleList()
+            self.pool = torch.nn.MaxPool2d(kernel_size=2, stride=2)
+
+            for feature in features:
+                self.downs.append(_DoubleConvBlock(in_channels, feature).block)
+                in_channels = feature
+
+            for feature in reversed(features):
+                self.ups.append(torch.nn.ConvTranspose2d(feature * 2, feature, kernel_size=2, stride=2))
+                self.ups.append(_DoubleConvBlock(feature * 2, feature).block)
+
+            self.bottleneck = _DoubleConvBlock(features[-1], features[-1] * 2).block
+            self.final_conv = torch.nn.Conv2d(features[0], out_channels, kernel_size=1)
+
+        def forward(self, x):
+            skip_connections = []
+            for down in self.downs:
+                x = down(x)
+                skip_connections.append(x)
+                x = self.pool(x)
+
+            x = self.bottleneck(x)
+            skip_connections = skip_connections[::-1]
+
+            for idx in range(0, len(self.ups), 2):
+                x = self.ups[idx](x)
+                skip_connection = skip_connections[idx // 2]
+                if x.shape[2:] != skip_connection.shape[2:]:
+                    x = torch.nn.functional.interpolate(
+                        x, size=skip_connection.shape[2:], mode="bilinear", align_corners=False
+                    )
+                x = torch.cat((skip_connection, x), dim=1)
+                x = self.ups[idx + 1](x)
+            return self.final_conv(x)
+
+    return _UNet
+
+
+def _resolve_unet_builder(torch):
+    class_path = os.environ.get("BLOBINSPECTOR_UNET_MODEL_CLASS")
+    kwargs_env = os.environ.get("BLOBINSPECTOR_UNET_MODEL_KWARGS")
+    kwargs = {}
+    if kwargs_env:
+        try:
+            kwargs = json.loads(kwargs_env)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "Invalid JSON in BLOBINSPECTOR_UNET_MODEL_KWARGS; provide a JSON object of constructor arguments."
+            ) from exc
+    if class_path:
+        module_name, class_name = class_path.rsplit(".", 1)
+        module = importlib.import_module(module_name)
+        model_cls = getattr(module, class_name)
+        return model_cls, kwargs
+    if kwargs:
+        return _build_unet_class(torch), kwargs
+    features_env = os.environ.get("BLOBINSPECTOR_UNET_FEATURES", "64,128,256,512")
+    features = [int(item) for item in features_env.split(",") if item.strip()]
+    in_channels = int(os.environ.get("BLOBINSPECTOR_UNET_IN_CHANNELS", "1"))
+    out_channels = int(os.environ.get("BLOBINSPECTOR_UNET_OUT_CHANNELS", "1"))
+    return _build_unet_class(torch), {"in_channels": in_channels, "out_channels": out_channels, "features": features}
+
+
+def _load_unet_state_dict(state_dict, device, torch):
+    model_cls, kwargs = _resolve_unet_builder(torch)
+    model = model_cls(**kwargs).to(device)
+    cleaned_state = {}
+    for key, value in state_dict.items():
+        if key.startswith("module."):
+            cleaned_state[key[7:]] = value
+        else:
+            cleaned_state[key] = value
+    model.load_state_dict(cleaned_state)
+    return model
 def run_unet_segmentation(image, model_path=None, device=None, threshold=0.5):
-    '''Segments an image using a UNet model (TorchScript or pickled module).
+    '''Segments an image using a UNet model (state_dict, TorchScript,or pickled module).
     Parameters:
     image: image as a numpy array
-    model_path: optional path to a TorchScript (.pt) or pickled torch module
+    model_path: optional path to a state_dict (.pth), TorchScript (.pt), or pickled torch module
     device: optional torch device string (e.g. "cpu", "cuda")
     threshold: float threshold for binarizing the model output
     Returns:
@@ -61,14 +159,26 @@ def run_unet_segmentation(image, model_path=None, device=None, threshold=0.5):
 
     model = None
     try:
-        model = torch.jit.load(model_path, map_location=device)
-    except RuntimeError:
+       
         model_obj = torch.load(model_path, map_location=device)
+    except (RuntimeError, EOFError, ValueError) as exc:
+        try:
+            model = torch.jit.load(model_path, map_location=device)
+        except RuntimeError as jit_exc:
+            raise ValueError(
+                "Unsupported UNet model format. Provide a state_dict (.pth), TorchScript (.pt), or pickled torch.nn.Module."
+            ) from jit_exc
+        else:
+            model_obj = None
+    if model is None:
         if isinstance(model_obj, torch.nn.Module):
             model = model_obj
+        elif isinstance(model_obj, dict):
+            state_dict = model_obj.get("state_dict", model_obj)
+            model = _load_unet_state_dict(state_dict, device, torch)
         else:
             raise ValueError(
-                "Unsupported UNet model format. Please provide a TorchScript model or a pickled torch.nn.Module."
+                "Unsupported UNet model format. Provide a state_dict (.pth), TorchScript (.pt), or a pickled torch.nn.Module."
             )
     model.eval()
     with torch.no_grad():
