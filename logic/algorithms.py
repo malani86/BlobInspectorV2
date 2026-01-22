@@ -323,20 +323,13 @@ def run_unet_segmentation(image, model_path=None, device=None, threshold=0.5):
             f"UNet model not found at {model_path}. Set BLOBINSPECTOR_UNET_MODEL_PATH to your .pth model file."
         )
 
-    if image.ndim == 3:
-        if image.shape[-1] == 4:
-            image = color.rgba2rgb(image)
-        if image.shape[-1] == 3:
-            image = color.rgb2gray(image)
-    image = image.astype(np.float32)
-    max_im = np.max(image)
-    if max_im > 1:
-        image = image / max_im
+
 
     device = torch.device(device) if device else torch.device("cpu")
-    tensor = torch.from_numpy(image).unsqueeze(0).unsqueeze(0).to(device)
+
 
     model = None
+    inferred = {}
     try:
        
         model_obj = torch.load(model_path, map_location=device)
@@ -352,6 +345,7 @@ def run_unet_segmentation(image, model_path=None, device=None, threshold=0.5):
     if model is None:
         if isinstance(model_obj, torch.nn.Module):
             model = model_obj
+            inferred = _infer_unet_hyperparams(model.state_dict())
         elif isinstance(model_obj, dict):
             state_dict = model_obj.get("state_dict", model_obj)
             model = _load_unet_state_dict(state_dict, device, torch)
@@ -359,6 +353,19 @@ def run_unet_segmentation(image, model_path=None, device=None, threshold=0.5):
             raise ValueError(
                 "Unsupported UNet model format. Provide a state_dict (.pth), TorchScript (.pt), or a pickled torch.nn.Module."
             )
+            try:
+        model = model.to(device)
+    except AttributeError:
+        pass
+
+    expected_in_channels = inferred.get("in_channels") or int(os.environ.get("BLOBINSPECTOR_UNET_IN_CHANNELS", "1"))
+    image = _prepare_unet_image(image, expected_in_channels)
+
+    if image.ndim == 2:
+        tensor = torch.from_numpy(image).unsqueeze(0).unsqueeze(0)
+    else:
+        tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0)
+    tensor = tensor.to(device)
     model.eval()
     with torch.no_grad():
         output = model(tensor)
