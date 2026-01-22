@@ -213,6 +213,32 @@ def _resolve_unet_builder(torch, state_dict_keys=None):
 
 def _infer_unet_hyperparams(state_dict):
     def _infer_features(keys):
+        features = []
+        enc_stage = {}
+        downs_stage = {}
+        for key in keys:
+            if key.endswith("weight"):
+                parts = key.split(".")
+                if len(parts) >= 3 and parts[0].startswith("enc") and parts[1] == "0":
+                    stage = parts[0][3:]
+                    if stage.isdigit():
+                        weight = state_dict[key]
+                        if weight.ndim == 4:
+                            enc_stage[int(stage)] = int(weight.shape[0])
+                if len(parts) >= 4 and parts[0] == "downs" and parts[2] == "0":
+                    stage = parts[1]
+                    if stage.isdigit():
+                        weight = state_dict[key]
+                        if weight.ndim == 4:
+                            downs_stage[int(stage)] = int(weight.shape[0])
+        if enc_stage:
+            for stage in sorted(enc_stage.keys()):
+                features.append(enc_stage[stage])
+            return features
+        if downs_stage:
+            for stage in sorted(downs_stage.keys()):
+                features.append(downs_stage[stage])
+            return features
         candidates = []
         for key in keys:
             if key.endswith("weight"):
@@ -220,8 +246,12 @@ def _infer_unet_hyperparams(state_dict):
                 if name.startswith(("enc", "down", "downs")):
                     weight = state_dict[key]
                     if weight.ndim == 4:
-                        candidates.append(weight.shape[0])
-        return candidates
+                        candidates.append(int(weight.shape[0]))
+        unique = []
+        for value in candidates:
+            if value not in unique:
+                unique.append(value)
+        return unique
 
     def _infer_in_channels(keys):
         for key in keys:
