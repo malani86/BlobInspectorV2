@@ -378,12 +378,12 @@ def run_unet_segmentation(image, model_path=None, device=None, threshold=0.5):
             inferred = _infer_unet_hyperparams(model.state_dict())
         elif isinstance(model_obj, dict):
             state_dict = model_obj.get("state_dict", model_obj)
-            model = _load_unet_state_dict(state_dict, device, torch)
+            model, inferred = _load_unet_state_dict(state_dict, device, torch)
         else:
             raise ValueError(
                 "Unsupported UNet model format. Provide a state_dict (.pth), TorchScript (.pt), or a pickled torch.nn.Module."
             )
-            try:
+    try:
         model = model.to(device)
     except AttributeError:
         pass
